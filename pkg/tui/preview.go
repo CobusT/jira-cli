@@ -385,6 +385,12 @@ func (pv *Preview) initContents() {
 				case 'r':
 					pv.refresh()
 					return nil
+				case 's':
+					pv.sort(false)
+					return nil
+				case 'S':
+					pv.sort(true)
+					return nil
 				case '/':
 					pv.startSearch(pv.contents.view, searchDirForward)
 					return nil

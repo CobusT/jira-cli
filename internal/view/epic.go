@@ -94,7 +94,7 @@ func (el *EpicList) footerText() string {
 }
 
 func (el *EpicList) helpText() string {
-	epicHelp := "\n\tEpics (in the sidebar):" +
+	epicHelp := "\n\tEpics (from either screen):" +
 		"\n\t  - Press 's' to cycle the sort field (default, updated, created, status, key, summary)." +
 		"\n\t  - Press 'SHIFT+S' to reverse the sort order."
 	if el.Refresh != nil {
