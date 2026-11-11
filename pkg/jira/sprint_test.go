@@ -237,9 +237,7 @@ func TestSprintIssues(t *testing.T) {
 						IsWatching bool `json:"isWatching"`
 						WatchCount int  `json:"watchCount"`
 					}{IsWatching: true, WatchCount: 1},
-					Status: struct {
-						Name string `json:"name"`
-					}{Name: "To Do"},
+					Status:  IssueStatus{Name: "To Do"},
 					Created: "2020-12-03T14:05:20.974+0100",
 					Updated: "2020-12-03T14:05:20.974+0100",
 				},
@@ -260,9 +258,7 @@ func TestSprintIssues(t *testing.T) {
 						IsWatching bool `json:"isWatching"`
 						WatchCount int  `json:"watchCount"`
 					}{IsWatching: true, WatchCount: 12},
-					Status: struct {
-						Name string `json:"name"`
-					}{Name: "In Progress"},
+					Status:  IssueStatus{Name: "In Progress"},
 					Created: "2020-12-03T14:05:20.974+0100",
 					Updated: "2020-12-03T14:05:20.974+0100",
 				},
@@ -289,9 +285,7 @@ func TestSprintIssues(t *testing.T) {
 						IsWatching bool `json:"isWatching"`
 						WatchCount int  `json:"watchCount"`
 					}{IsWatching: false, WatchCount: 3},
-					Status: struct {
-						Name string `json:"name"`
-					}{Name: "Done"},
+					Status:  IssueStatus{Name: "Done"},
 					Created: "2020-12-03T14:05:20.974+0100",
 					Updated: "2020-12-03T14:05:20.974+0100",
 				},

@@ -21,6 +21,11 @@ type PreviewData struct {
 // the footer text to display with it.
 type PreviewRefreshFunc func() ([]PreviewData, string, error)
 
+// PreviewSortFunc re-sorts the preview data when a user presses 's' (next sort
+// field, reverse is false) or 'S' (reverse sort order, reverse is true). It
+// returns the sorted data and the footer text to display with it.
+type PreviewSortFunc func(reverse bool) ([]PreviewData, string)
+
 // Preview is the preview layout.
 //
 // It contains 2 tables internally, viz: sidebar and contents.
@@ -37,6 +42,7 @@ type Preview struct {
 	contentsCache       map[string]interface{}
 	refreshFunc         PreviewRefreshFunc
 	refreshing          bool
+	sortFunc            PreviewSortFunc
 	cacheGen            int
 	search              *searchState
 }
@@ -98,6 +104,14 @@ func WithContentTableOpts(opts ...TableOption) PreviewOption {
 func WithPreviewRefreshFunc(fn PreviewRefreshFunc) PreviewOption {
 	return func(p *Preview) {
 		p.refreshFunc = fn
+	}
+}
+
+// WithPreviewSortFunc sets a function that is called to re-sort the sidebar
+// when a user presses 's' or 'S'.
+func WithPreviewSortFunc(fn PreviewSortFunc) PreviewOption {
+	return func(p *Preview) {
+		p.sortFunc = fn
 	}
 }
 
@@ -168,29 +182,48 @@ func (pv *Preview) refresh() {
 				return
 			}
 
-			var selectedKey string
-			if sr, _ := pv.sidebar.GetSelection(); sr >= 0 && sr < len(pv.data) {
-				selectedKey = pv.data[sr].Key
-			}
-
-			pv.data = data
-			pv.contentsCache = make(map[string]interface{})
-			pv.cacheGen++
-			pv.footerText = footerText
-			pv.footer.SetText(pad(footerText, 1))
-			pv.renderSidebar()
-
-			row := 0
-			for i, d := range data {
-				if d.Key == selectedKey {
-					row = i
-					break
-				}
-			}
-			// Select always fires the selection changed func, which reloads the contents.
-			pv.sidebar.Select(row, 0)
+			pv.setData(data, footerText, true)
 		})
 	}()
+}
+
+// sort re-sorts the sidebar using the sort func. When reverse is set the sort
+// order is reversed, otherwise the next sort field is selected.
+func (pv *Preview) sort(reverse bool) {
+	if pv.sortFunc == nil {
+		return
+	}
+	data, footerText := pv.sortFunc(reverse)
+	pv.setData(data, footerText, false)
+}
+
+// setData replaces the sidebar data while keeping the current selection. It
+// must be called on the UI goroutine. When resetCache is set, cached contents
+// are discarded.
+func (pv *Preview) setData(data []PreviewData, footerText string, resetCache bool) {
+	var selectedKey string
+	if sr, _ := pv.sidebar.GetSelection(); sr >= 0 && sr < len(pv.data) {
+		selectedKey = pv.data[sr].Key
+	}
+
+	pv.data = data
+	if resetCache {
+		pv.contentsCache = make(map[string]interface{})
+		pv.cacheGen++
+	}
+	pv.footerText = footerText
+	pv.footer.SetText(pad(footerText, 1))
+	pv.renderSidebar()
+
+	row := 0
+	for i, d := range data {
+		if d.Key == selectedKey {
+			row = i
+			break
+		}
+	}
+	// Select always fires the selection changed func, which reloads the contents.
+	pv.sidebar.Select(row, 0)
 }
 
 // loadContents shows the contents for the given sidebar row. It must be called
@@ -290,6 +323,12 @@ func (pv *Preview) initSidebar() {
 					pv.contents.view.SetSelectable(true, false).Select(1, 0)
 				case 'r':
 					pv.refresh()
+					return nil
+				case 's':
+					pv.sort(false)
+					return nil
+				case 'S':
+					pv.sort(true)
 					return nil
 				case '/':
 					pv.startSearch(pv.sidebar, searchDirForward)

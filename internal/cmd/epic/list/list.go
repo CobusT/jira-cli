@@ -22,9 +22,18 @@ const (
 By default epics are displayed in an explorer view. You can use --table
 and --plain flags to display output in different modes.
 
-Issues within an epic are filtered to open ones (status category is not Done)
-by default. Use --include-done to show all issues, or pass --status/--resolution
-to filter explicitly.`
+Epics and the issues within them are filtered to open ones (status category is
+not Done) by default. Use --include-done to show done epics and issues too, or
+pass --status/--resolution to filter explicitly.
+
+The default sort order of epics can be set in the config file, eg:
+
+  epic:
+    order_by: rank   # any JQL order by field, eg: rank, updated, created
+    order: asc       # asc or desc; defaults to asc for rank, desc otherwise
+
+The --order-by and --reverse flags take precedence over the config. In the
+explorer view, press 's' to cycle the sort field and 'S' to reverse it.`
 
 	examples = `# Display epics in an explorer view
 $ jira epic list
@@ -41,8 +50,12 @@ $ jira epic list <KEY> --plain
 $ jira epic list --table --plain --no-headers
 $ jira epic list <KEY> --plain --no-headers
 
-# Include done issues when listing issues in an epic
+# Include done epics and done issues within epics
+$ jira epic list --include-done
 $ jira epic list <KEY> --include-done
+
+# Order epics by board rank (backlog order)
+$ jira epic list --order-by rank --reverse
 
 # Display some columns of epic or epic issues in a plain table view
 $ jira epic list --table --plain --columns key,summary,status
@@ -87,6 +100,7 @@ func epicList(cmd *cobra.Command, args []string) {
 	client := api.DefaultClient(debug)
 
 	if len(args) == 0 {
+		cmdutil.ExitIfError(applyEpicOrderConfig(cmd))
 		epicExplorerView(cmd, cmd.Flags(), project, projectType, server, client)
 	} else {
 		key := cmdutil.GetJiraIssueKey(project, args[0])
@@ -188,12 +202,18 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 	cmdutil.ExitIfError(err)
 	userJQL := q.Params().JQL
 
+	openOnly, err := isOpenOnly(flags)
+	cmdutil.ExitIfError(err)
+
 	// fetchEpics builds a fresh query each time since the issues func below
 	// mutates the shared query params for next-gen projects.
 	fetchEpics := func() ([]*jira.Issue, error) {
 		eq, err := query.NewIssue(project, flags)
 		if err != nil {
 			return nil, err
+		}
+		if openOnly {
+			eq.Params().JQL = withOpenOnly(eq.Params().JQL)
 		}
 		resp, err := api.ProxySearch(client, eq.Get(), eq.Params().From, eq.Params().Limit)
 		if err != nil {
@@ -217,9 +237,6 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 	}
 
 	fixedColumns, err := flags.GetUint("fixed-columns")
-	cmdutil.ExitIfError(err)
-
-	openOnly, err := isOpenOnly(flags)
 	cmdutil.ExitIfError(err)
 
 	v := view.EpicList{
@@ -258,7 +275,8 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 			}
 			return resp.Issues
 		},
-		Refresh: fetchEpics,
+		Refresh:      fetchEpics,
+		DefaultOrder: orderLabel(q.Params().OrderBy, q.Params().Reverse),
 		Display: view.DisplayFormat{
 			FixedColumns: fixedColumns,
 			TableStyle:   cmdutil.GetTUIStyleConfig(),
@@ -273,6 +291,9 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 	cmdutil.ExitIfError(err)
 
 	if table || plain || tui.IsDumbTerminal() || tui.IsNotTTY() {
+		if openOnly {
+			cmdutil.ExitIfError(cmd.Flags().Set("jql", withOpenOnly(userJQL)))
+		}
 		list.List(cmd, nil)
 	} else {
 		cmdutil.ExitIfError(v.Render())
@@ -280,6 +301,45 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 }
 
 const openOnlyJQL = "statusCategory != Done"
+
+// applyEpicOrderConfig applies the default epic order from the config
+// (epic.order_by and epic.order) unless --order-by or --reverse were passed.
+func applyEpicOrderConfig(cmd *cobra.Command) error {
+	flags := cmd.Flags()
+	if flags.Changed("order-by") || flags.Changed("reverse") {
+		return nil
+	}
+	orderBy := strings.TrimSpace(viper.GetString("epic.order_by"))
+	if orderBy == "" {
+		return nil
+	}
+	if err := flags.Set("order-by", orderBy); err != nil {
+		return err
+	}
+
+	order := strings.ToLower(strings.TrimSpace(viper.GetString("epic.order")))
+	switch order {
+	case "":
+		if strings.EqualFold(orderBy, "rank") {
+			order = "asc"
+		}
+	case "asc", "desc":
+	default:
+		return fmt.Errorf("invalid epic.order %q in config: must be asc or desc", order)
+	}
+	// The --reverse flag switches the default DESC order to ASC.
+	if order == "asc" {
+		return flags.Set("reverse", "true")
+	}
+	return nil
+}
+
+func orderLabel(orderBy string, ascending bool) string {
+	if ascending {
+		return orderBy + " ↑"
+	}
+	return orderBy + " ↓"
+}
 
 // isOpenOnly reports whether epic child issues should be limited to open ones.
 // This is the default unless --include-done is passed or the user filters by

@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ankitpokhrel/jira-cli/api"
 	"github.com/ankitpokhrel/jira-cli/pkg/jira"
@@ -23,6 +24,11 @@ type EpicList struct {
 	Issues  EpicIssueFunc
 	Refresh EpicRefreshFunc
 	Display DisplayFormat
+	// DefaultOrder describes the order epics are fetched in, eg: "rank ↑".
+	DefaultOrder string
+
+	sortIdx      int
+	sortReversed bool
 }
 
 // Render renders the epic explorer view.
@@ -74,19 +80,29 @@ func (el *EpicList) Render() error {
 			return el.data(), el.footerText(), nil
 		}))
 	}
+	opts = append(opts, tui.WithPreviewSortFunc(func(reverse bool) ([]tui.PreviewData, string) {
+		el.cycleSort(reverse)
+		return el.data(), el.footerText()
+	}))
 
 	return tui.NewPreview(opts...).Paint(data)
 }
 
 func (el *EpicList) footerText() string {
-	return fmt.Sprintf("Showing %d results for project %q", len(el.Data), el.Project)
+	return fmt.Sprintf("Showing %d results for project %q · sorted by %s (s: next sort, S: reverse)",
+		len(el.Data), el.Project, el.sortLabel())
 }
 
 func (el *EpicList) helpText() string {
-	if el.Refresh == nil {
-		return helpText
+	epicHelp := "\n\tEpics (in the sidebar):" +
+		"\n\t  - Press 's' to cycle the sort field (default, updated, created, status, key, summary)." +
+		"\n\t  - Press 'SHIFT+S' to reverse the sort order."
+	if el.Refresh != nil {
+		epicHelp += "\n\t  - Press 'r' (or 'CTRL+R' / 'F5') to refresh the epics and their issues."
 	}
-	return helpText + "\n\n\tPress 'r' (or 'CTRL+R' / 'F5') to refresh the epics and their issues."
+	epicHelp += "\n\t\n\tPress 'q' / ESC / CTRL+C to quit."
+
+	return strings.Replace(helpText, "\n\tPress 'q' / ESC / CTRL+C to quit.", epicHelp, 1)
 }
 
 func (el *EpicList) data() []tui.PreviewData {
@@ -99,7 +115,7 @@ func (el *EpicList) data() []tui.PreviewData {
 			return el.helpText()
 		},
 	})
-	for _, issue := range el.Data {
+	for _, issue := range el.sortedEpics() {
 		data = append(data, tui.PreviewData{
 			Key:  issue.Key,
 			Menu: fmt.Sprintf("➤ %s: %s", issue.Key, prepareTitle(issue.Fields.Summary)),

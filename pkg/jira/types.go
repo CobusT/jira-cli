@@ -92,9 +92,7 @@ type IssueFields struct {
 		IsWatching bool `json:"isWatching"`
 		WatchCount int  `json:"watchCount"`
 	} `json:"watches"`
-	Status struct {
-		Name string `json:"name"`
-	} `json:"status"`
+	Status     IssueStatus `json:"status"`
 	Components []struct {
 		Name string `json:"name"`
 	} `json:"components"`
@@ -192,4 +190,14 @@ type User struct {
 	Name        string `json:"name,omitempty"`
 	DisplayName string `json:"displayName"`
 	Active      bool   `json:"active"`
+}
+
+// IssueStatus is the status of an issue.
+type IssueStatus struct {
+	Name           string `json:"name"`
+	StatusCategory struct {
+		// Key is one of "new", "indeterminate" or "done".
+		Key  string `json:"key"`
+		Name string `json:"name"`
+	} `json:"statusCategory"`
 }

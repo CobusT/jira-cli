@@ -45,9 +45,7 @@ func TestIssueDetailsRenderInPlainView(t *testing.T) {
 			Reporter: struct {
 				Name string `json:"displayName"`
 			}{Name: "Person Z"},
-			Status: struct {
-				Name string `json:"name"`
-			}{Name: "Done"},
+			Status: jira.IssueStatus{Name: "Done"},
 			Components: []struct {
 				Name string `json:"name"`
 			}{{Name: "BE"}, {Name: "FE"}},
@@ -110,9 +108,7 @@ func TestIssueDetailsWithV2Description(t *testing.T) {
 			Reporter: struct {
 				Name string `json:"displayName"`
 			}{Name: "Person Z"},
-			Status: struct {
-				Name string `json:"name"`
-			}{Name: "Done"},
+			Status: jira.IssueStatus{Name: "Done"},
 			Components: []struct {
 				Name string `json:"name"`
 			}{{Name: "BE"}, {Name: "FE"}},
@@ -142,9 +138,7 @@ func TestIssueDetailsWithV2Description(t *testing.T) {
 					Key: "TEST-2",
 					Fields: jira.IssueFields{
 						Summary: "Subtask 1",
-						Status: struct {
-							Name string `json:"name"`
-						}{Name: "TO DO"},
+						Status:  jira.IssueStatus{Name: "TO DO"},
 						Priority: struct {
 							Name string `json:"name"`
 						}{Name: "High"},
@@ -154,9 +148,7 @@ func TestIssueDetailsWithV2Description(t *testing.T) {
 					Key: "TEST-3",
 					Fields: jira.IssueFields{
 						Summary: "Subtask 2",
-						Status: struct {
-							Name string `json:"name"`
-						}{Name: "Done"},
+						Status:  jira.IssueStatus{Name: "Done"},
 						Priority: struct {
 							Name string `json:"name"`
 						}{Name: "Normal"},
@@ -186,9 +178,7 @@ func TestIssueDetailsWithV2Description(t *testing.T) {
 							IssueType: jira.IssueType{Name: "Bug"},
 							Priority: struct {
 								Name string `json:"name"`
-							}{Name: "High"}, Status: struct {
-								Name string `json:"name"`
-							}{Name: "TO DO"},
+							}{Name: "High"}, Status: jira.IssueStatus{Name: "TO DO"},
 						},
 					},
 				},
@@ -205,9 +195,7 @@ func TestIssueDetailsWithV2Description(t *testing.T) {
 							IssueType: jira.IssueType{Name: "Bug"},
 							Priority: struct {
 								Name string `json:"name"`
-							}{Name: "Urgent"}, Status: struct {
-								Name string `json:"name"`
-							}{Name: "Done"},
+							}{Name: "Urgent"}, Status: jira.IssueStatus{Name: "Done"},
 						},
 					},
 				},
