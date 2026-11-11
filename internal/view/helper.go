@@ -141,20 +141,57 @@ func jiraURLFromTuiData(server string, r int, d any) string {
 
 func navigate(server string) tui.SelectedFunc {
 	return func(r, _ int, d any) {
-		_ = browser.Browse(jiraURLFromTuiData(server, r, d))
+		openURL(jiraURLFromTuiData(server, r, d))
 	}
 }
 
 func copyURL(server string) tui.CopyFunc {
 	return func(r, _ int, d any) {
-		_ = clipboard.WriteAll(jiraURLFromTuiData(server, r, d))
+		copyText(jiraURLFromTuiData(server, r, d), "URL")
 	}
 }
 
 func copyKey() tui.CopyKeyFunc {
 	return func(r, _ int, d any) {
-		_ = clipboard.WriteAll(issueKeyFromTuiData(r, d))
+		copyText(issueKeyFromTuiData(r, d), "key")
 	}
+}
+
+// openURL opens the url in a browser. When the user's terminal is remote (mosh
+// or ssh), a browser opened here wouldn't reach them, so the url is copied to
+// their terminal's clipboard instead and shown in the footer.
+// It must be called on the TUI's UI goroutine.
+func openURL(url string) {
+	if !browser.HasBrowserOverride() {
+		if s := browser.DetectSession(); s.Remote {
+			if err := browser.CopyToTerminalClipboard(url, s); err != nil {
+				tui.Notify(fmt.Sprintf("Remote session: couldn't copy URL (%s): %s", err, url))
+				return
+			}
+			tui.Notify("Remote session: copied URL to your clipboard, paste it in your browser: " + url)
+			return
+		}
+	}
+	if err := browser.Browse(url); err != nil {
+		tui.Notify(fmt.Sprintf("Couldn't open browser (%s): %s", err, url))
+	}
+}
+
+// copyText copies text to the clipboard of the user's terminal, which may be
+// on another machine, and confirms it in the footer.
+// It must be called on the TUI's UI goroutine.
+func copyText(text, what string) {
+	var err error
+	if s := browser.DetectSession(); s.Remote {
+		err = browser.CopyToTerminalClipboard(text, s)
+	} else {
+		err = clipboard.WriteAll(text)
+	}
+	if err != nil {
+		tui.Notify(fmt.Sprintf("Couldn't copy %s (%s): %s", what, err, text))
+		return
+	}
+	tui.Notify(fmt.Sprintf("Copied %s: %s", what, text))
 }
 
 func renderPlain(w io.Writer, data tui.TableData, delimiter string) error {

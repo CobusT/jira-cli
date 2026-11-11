@@ -33,7 +33,15 @@ The default sort order of epics can be set in the config file, eg:
     order: asc       # asc or desc; defaults to asc for rank, desc otherwise
 
 The --order-by and --reverse flags take precedence over the config. In the
-explorer view, press 's' to cycle the sort field and 'S' to reverse it.`
+explorer view, press 's' to cycle the sort field and 'S' to reverse it.
+
+The explorer has two layouts: "panes" (epics on the left, the selected epic's
+issues on the right) and "tree" (a single list where TAB expands an epic in
+place). Press 'V' to switch between them. The initial layout can be set with
+--layout or in the config:
+
+  epic:
+    layout: tree   # panes (default) or tree`
 
 	examples = `# Display epics in an explorer view
 $ jira epic list
@@ -53,6 +61,9 @@ $ jira epic list <KEY> --plain --no-headers
 # Include done epics and done issues within epics
 $ jira epic list --include-done
 $ jira epic list <KEY> --include-done
+
+# Open the explorer in the single list (tree) layout
+$ jira epic list --layout tree
 
 # Order epics by board rank (backlog order)
 $ jira epic list --order-by rank --reverse
@@ -276,6 +287,7 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 			return resp.Issues
 		},
 		Refresh:      fetchEpics,
+		Layout:       epicLayout(flags),
 		DefaultOrder: orderLabel(q.Params().OrderBy, q.Params().Reverse),
 		Display: view.DisplayFormat{
 			FixedColumns: fixedColumns,
@@ -334,6 +346,26 @@ func applyEpicOrderConfig(cmd *cobra.Command) error {
 	return nil
 }
 
+// epicLayout returns the explorer layout from the --layout flag or the
+// epic.layout config, defaulting to panes.
+func epicLayout(flags query.FlagParser) view.EpicLayout {
+	layout, err := flags.GetString("layout")
+	cmdutil.ExitIfError(err)
+	if layout == "" {
+		layout = viper.GetString("epic.layout")
+	}
+	layout = strings.ToLower(strings.TrimSpace(layout))
+
+	switch view.EpicLayout(layout) {
+	case "", view.EpicLayoutPanes:
+		return view.EpicLayoutPanes
+	case view.EpicLayoutTree:
+		return view.EpicLayoutTree
+	}
+	cmdutil.Failed("Invalid layout %q: must be one of %s", layout, strings.Join(view.ValidEpicLayouts(), ", "))
+	return view.EpicLayoutPanes
+}
+
 func orderLabel(orderBy string, ascending bool) string {
 	if ascending {
 		return orderBy + " ↑"
@@ -384,6 +416,7 @@ func applyOpenOnlyFilter(flags query.FlagParser, q *query.Issue) error {
 func setFlags(cmd *cobra.Command) {
 	list.SetFlags(cmd)
 	cmd.Flags().Bool("table", false, "Display epics in table view")
+	cmd.Flags().String("layout", "", "Explorer layout: panes or tree (default from config epic.layout, else panes)")
 	cmd.Flags().Bool("include-done", false, "Include done issues when listing issues in an epic (default shows only open issues)")
 }
 

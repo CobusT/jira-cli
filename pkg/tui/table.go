@@ -228,6 +228,7 @@ func (t *Table) Paint(data TableData) error {
 	}
 	t.data = data
 	t.render(data)
+	setNotifier(t.footer)
 	return t.screen.Paint(t.painter)
 }
 

@@ -14,8 +14,12 @@ const (
 	searchDirBackward = -1
 )
 
-// searchState holds vi-like search state for the preview layout.
+// searchState holds vi-like search state for a TUI layout.
 type searchState struct {
+	screen     *Screen
+	footer     *tview.TextView
+	footerText func() string
+
 	input    *tview.InputField
 	bottom   *tview.Pages
 	target   *tview.Table
@@ -25,97 +29,124 @@ type searchState struct {
 	active   bool
 }
 
-func newSearchState(footer tview.Primitive) *searchState {
+// newSearchState creates search state for a layout. The returned bottom pages
+// should be placed where the footer would go; the search prompt replaces the
+// footer while searching. footerText returns the footer's normal text.
+func newSearchState(screen *Screen, footer *tview.TextView, footerText func() string) *searchState {
 	input := tview.NewInputField().
 		SetLabel("/").
 		SetFieldBackgroundColor(tcell.ColorDefault).
 		SetLabelColor(tcell.ColorYellow)
 
-	return &searchState{
-		input: input,
+	ss := &searchState{
+		screen:     screen,
+		footer:     footer,
+		footerText: footerText,
+		input:      input,
 		bottom: tview.NewPages().
 			AddPage("footer", footer, true, true).
 			AddPage("search", input, true, false),
 		dir: searchDirForward,
 	}
+	ss.init()
+
+	return ss
 }
 
-func (pv *Preview) initSearch() {
-	pv.search.input.
+func (ss *searchState) init() {
+	ss.input.
 		SetChangedFunc(func(text string) {
 			// Incremental search from where the search started.
-			if text == "" || pv.search.target == nil {
+			if text == "" || ss.target == nil {
 				return
 			}
-			r, ok := findRow(pv.search.target, text, pv.search.startRow, pv.search.dir, true)
+			r, ok := findRow(ss.target, text, ss.startRow, ss.dir, true)
 			if !ok {
-				r = pv.search.startRow
+				r = ss.startRow
 			}
-			if cur, _ := pv.search.target.GetSelection(); cur != r {
-				pv.search.target.Select(r, 0)
+			if cur, _ := ss.target.GetSelection(); cur != r {
+				ss.target.Select(r, 0)
 			}
 		}).
 		SetDoneFunc(func(key tcell.Key) {
-			target := pv.search.target
-			text := pv.search.input.GetText()
+			target := ss.target
+			text := ss.input.GetText()
 
-			pv.search.active = false
-			pv.search.bottom.SwitchToPage("footer")
-			pv.screen.SetFocus(target)
+			ss.active = false
+			ss.bottom.SwitchToPage("footer")
+			ss.screen.SetFocus(target)
 
 			switch key {
 			case tcell.KeyEnter:
 				if text == "" {
 					return
 				}
-				pv.search.term = text
-				pv.searchJump(target, pv.search.startRow, pv.search.dir, true)
+				ss.term = text
+				ss.jump(target, ss.startRow, ss.dir, true)
 			case tcell.KeyEscape:
 				// Cancel: restore the original selection.
-				target.Select(pv.search.startRow, 0)
+				target.Select(ss.startRow, 0)
 			}
 		})
 }
 
-// startSearch opens the search prompt for the given table.
-func (pv *Preview) startSearch(target *tview.Table, dir int) {
+// start opens the search prompt for the given table.
+func (ss *searchState) start(target *tview.Table, dir int) {
 	r, _ := target.GetSelection()
 
-	pv.search.target = target
-	pv.search.startRow = r
-	pv.search.dir = dir
-	pv.search.input.SetLabel(map[int]string{searchDirForward: "/", searchDirBackward: "?"}[dir])
-	pv.search.input.SetText("")
-	pv.search.active = true
-	pv.search.bottom.SwitchToPage("search")
-	pv.screen.SetFocus(pv.search.input)
+	ss.target = target
+	ss.startRow = r
+	ss.dir = dir
+	ss.input.SetLabel(map[int]string{searchDirForward: "/", searchDirBackward: "?"}[dir])
+	ss.input.SetText("")
+	ss.active = true
+	ss.bottom.SwitchToPage("search")
+	ss.screen.SetFocus(ss.input)
 }
 
-// searchNext jumps to the next (or previous when reverse is set) match of the
+// next jumps to the next (or previous when reverse is set) match of the
 // last search term in the given table, like vi's 'n' and 'N'.
-func (pv *Preview) searchNext(target *tview.Table, reverse bool) {
-	if pv.search.term == "" {
+func (ss *searchState) next(target *tview.Table, reverse bool) {
+	if ss.term == "" {
 		return
 	}
-	dir := pv.search.dir
+	dir := ss.dir
 	if reverse {
 		dir = -dir
 	}
 	r, _ := target.GetSelection()
-	pv.searchJump(target, r, dir, false)
+	ss.jump(target, r, dir, false)
 }
 
-func (pv *Preview) searchJump(target *tview.Table, from, dir int, includeFrom bool) {
-	r, ok := findRow(target, pv.search.term, from, dir, includeFrom)
+func (ss *searchState) jump(target *tview.Table, from, dir int, includeFrom bool) {
+	r, ok := findRow(target, ss.term, from, dir, includeFrom)
 	if !ok {
-		pv.footer.SetText(pad(fmt.Sprintf("Pattern not found: %s", pv.search.term), 1))
+		ss.footer.SetText(pad(fmt.Sprintf("Pattern not found: %s", ss.term), 1))
 		if cur, _ := target.GetSelection(); cur != from {
 			target.Select(from, 0)
 		}
 		return
 	}
-	pv.footer.SetText(pad(pv.footerText, 1))
+	ss.footer.SetText(pad(ss.footerText(), 1))
 	target.Select(r, 0)
+}
+
+// handleKey handles the search keys ('/', '?', 'n', 'N') for the given table.
+// It reports whether the key was handled.
+func (ss *searchState) handleKey(target *tview.Table, r rune) bool {
+	switch r {
+	case '/':
+		ss.start(target, searchDirForward)
+	case '?':
+		ss.start(target, searchDirBackward)
+	case 'n':
+		ss.next(target, false)
+	case 'N':
+		ss.next(target, true)
+	default:
+		return false
+	}
+	return true
 }
 
 // findRow finds the next selectable row containing term, starting after (or at,

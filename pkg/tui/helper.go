@@ -153,3 +153,26 @@ func customTUIStyle(style TableStyle) tcell.Style {
 		Foreground(fg).
 		Bold(style.SelectionTextIsBold)
 }
+
+// showInPager renders content in the background while showing a "please wait"
+// modal, then suspends the screen and shows the result in a pager. Focus is
+// returned to back afterwards.
+func showInPager(screen *Screen, painter *tview.Pages, back tview.Primitive, render func() (string, error)) {
+	go func() {
+		func() {
+			painter.ShowPage("secondary")
+			defer func() {
+				painter.HidePage("secondary")
+				screen.SetFocus(back)
+			}()
+
+			out, err := render()
+			if err == nil {
+				screen.Suspend(func() { _ = PagerOut(out) })
+			}
+		}()
+
+		// Refresh the screen.
+		screen.Draw()
+	}()
+}

@@ -46,6 +46,9 @@ type Preview struct {
 	sidebarTitle        string
 	contentsTitle       string
 	sidebarPane         *paneStyle
+	sidebarViewFunc     ViewFunc
+	switchLayoutFunc    SwitchLayoutFunc
+	initialKey          string
 	contentsPane        *paneStyle
 	cacheGen            int
 	search              *searchState
@@ -111,6 +114,35 @@ func WithPreviewRefreshFunc(fn PreviewRefreshFunc) PreviewOption {
 	}
 }
 
+// ViewFunc returns the rendered details of the item with the given key.
+type ViewFunc func(key string) (string, error)
+
+// SwitchLayoutFunc is called with the selected key when a user presses 'V' to
+// switch to another layout. The current layout stops after it is called.
+type SwitchLayoutFunc func(selectedKey string)
+
+// WithSidebarViewFunc sets a function that renders the details of the selected
+// sidebar item when a user presses 'v' in the sidebar.
+func WithSidebarViewFunc(fn ViewFunc) PreviewOption {
+	return func(p *Preview) {
+		p.sidebarViewFunc = fn
+	}
+}
+
+// WithPreviewSwitchLayoutFunc sets a function that is called when a user presses 'V'.
+func WithPreviewSwitchLayoutFunc(fn SwitchLayoutFunc) PreviewOption {
+	return func(p *Preview) {
+		p.switchLayoutFunc = fn
+	}
+}
+
+// WithInitialSelection selects the sidebar item with the given key on start.
+func WithInitialSelection(key string) PreviewOption {
+	return func(p *Preview) {
+		p.initialKey = key
+	}
+}
+
 // WithPaneTitles sets the titles shown in the sidebar and contents frames.
 func WithPaneTitles(sidebar, contents string) PreviewOption {
 	return func(p *Preview) {
@@ -149,6 +181,17 @@ func (pv *Preview) Paint(pd []PreviewData) error {
 
 	pv.renderSidebar()
 	pv.printText(pv.initialText)
+
+	if pv.initialKey != "" {
+		for i, d := range pv.data {
+			if d.Key == pv.initialKey {
+				pv.sidebar.Select(i, 0)
+				break
+			}
+		}
+	}
+
+	setNotifier(pv.footer)
 
 	return pv.screen.Paint(pv.painter)
 }
@@ -197,6 +240,18 @@ func (pv *Preview) refresh() {
 			pv.setData(data, footerText, true)
 		})
 	}()
+}
+
+func (pv *Preview) switchLayout() {
+	if pv.switchLayoutFunc == nil {
+		return
+	}
+	var key string
+	if sr, _ := pv.sidebar.GetSelection(); sr >= 0 && sr < len(pv.data) {
+		key = pv.data[sr].Key
+	}
+	pv.switchLayoutFunc(key)
+	pv.screen.Stop()
 }
 
 // sort re-sorts the sidebar using the sort func. When reverse is set the sort
@@ -295,8 +350,7 @@ func (pv *Preview) init() {
 	pv.initSidebar()
 	pv.initContents()
 	pv.initFooter()
-	pv.search = newSearchState(pv.footer)
-	pv.initSearch()
+	pv.search = newSearchState(pv.screen, pv.footer, func() string { return pv.footerText })
 
 	grid := tview.NewGrid().
 		SetRows(0, 1, 2).
@@ -343,17 +397,21 @@ func (pv *Preview) initSidebar() {
 				case 'S':
 					pv.sort(true)
 					return nil
-				case '/':
-					pv.startSearch(pv.sidebar, searchDirForward)
+				case 'V':
+					pv.switchLayout()
 					return nil
-				case '?':
-					pv.startSearch(pv.sidebar, searchDirBackward)
+				case 'v':
+					sr, _ := pv.sidebar.GetSelection()
+					if pv.sidebarViewFunc == nil || sr <= 0 || sr >= len(pv.data) {
+						return nil
+					}
+					key := pv.data[sr].Key
+					showInPager(pv.screen, pv.painter, pv.sidebar, func() (string, error) {
+						return pv.sidebarViewFunc(key)
+					})
 					return nil
-				case 'n':
-					pv.searchNext(pv.sidebar, false)
-					return nil
-				case 'N':
-					pv.searchNext(pv.sidebar, true)
+				case '/', '?', 'n', 'N':
+					pv.search.handleKey(pv.sidebar, ev.Rune())
 					return nil
 				default:
 					pv.contents.view.SetSelectable(false, false)
@@ -404,17 +462,11 @@ func (pv *Preview) initContents() {
 				case 'S':
 					pv.sort(true)
 					return nil
-				case '/':
-					pv.startSearch(pv.contents.view, searchDirForward)
+				case 'V':
+					pv.switchLayout()
 					return nil
-				case '?':
-					pv.startSearch(pv.contents.view, searchDirBackward)
-					return nil
-				case 'n':
-					pv.searchNext(pv.contents.view, false)
-					return nil
-				case 'N':
-					pv.searchNext(pv.contents.view, true)
+				case '/', '?', 'n', 'N':
+					pv.search.handleKey(pv.contents.view, ev.Rune())
 					return nil
 				case 'c':
 					if pv.contents.copyFunc == nil {
@@ -428,27 +480,12 @@ func (pv *Preview) initContents() {
 					}
 					sr, _ := pv.sidebar.GetSelection()
 					r, c := pv.contents.view.GetSelection()
+					contents := pv.contentsCache[pv.data[sr].Key]
+					dataFn, renderFn := pv.contents.viewModeFunc(r, c, contents)
 
-					go func() {
-						func() {
-							pv.painter.ShowPage("secondary")
-							defer func() {
-								pv.painter.HidePage("secondary")
-								pv.screen.SetFocus(pv.contents.view)
-							}()
-
-							contents := pv.contentsCache[pv.data[sr].Key]
-							dataFn, renderFn := pv.contents.viewModeFunc(r, c, contents)
-
-							out, err := renderFn(dataFn())
-							if err == nil {
-								pv.screen.Suspend(func() { _ = PagerOut(out) })
-							}
-						}()
-
-						// Refresh the screen.
-						pv.screen.Draw()
-					}()
+					showInPager(pv.screen, pv.painter, pv.contents.view, func() (string, error) {
+						return renderFn(dataFn())
+					})
 				}
 			}
 			return ev

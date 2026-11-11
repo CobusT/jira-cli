@@ -46,6 +46,9 @@ var epicSortFields = []epicSortField{
 
 // sortedEpics returns a copy of the epics sorted by the current sort field.
 func (el *EpicList) sortedEpics() []*jira.Issue {
+	el.stateMu.RLock()
+	defer el.stateMu.RUnlock()
+
 	epics := make([]*jira.Issue, len(el.Data))
 	copy(epics, el.Data)
 
@@ -65,6 +68,9 @@ func (el *EpicList) sortedEpics() []*jira.Issue {
 
 // cycleSort selects the next sort field, or reverses the order when reverse is set.
 func (el *EpicList) cycleSort(reverse bool) {
+	el.stateMu.Lock()
+	defer el.stateMu.Unlock()
+
 	if reverse {
 		el.sortReversed = !el.sortReversed
 		return
@@ -75,6 +81,9 @@ func (el *EpicList) cycleSort(reverse bool) {
 
 // sortLabel describes the current sort, eg: "updated ↓".
 func (el *EpicList) sortLabel() string {
+	el.stateMu.RLock()
+	defer el.stateMu.RUnlock()
+
 	if el.sortIdx == 0 {
 		label := el.DefaultOrder
 		if label == "" {
