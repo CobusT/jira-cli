@@ -43,6 +43,7 @@ func (el *EpicList) Render() error {
 	data := el.data()
 	opts := []tui.PreviewOption{
 		tui.WithPreviewFooterText(el.footerText()),
+		tui.WithPaneTitles("Epics", "Issues"),
 		tui.WithInitialText(el.helpText()),
 		tui.WithSidebarSelectedFunc(navigate(el.Server)),
 		tui.WithContentTableOpts(

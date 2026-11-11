@@ -40,6 +40,7 @@ func (sl *SprintList) Render() error {
 
 	data := sl.data()
 	view := tui.NewPreview(
+		tui.WithPaneTitles("Sprints", "Issues"),
 		tui.WithPreviewFooterText(
 			fmt.Sprintf(
 				"Showing %d results from board %q of project %q",

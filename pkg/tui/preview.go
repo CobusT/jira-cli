@@ -43,6 +43,10 @@ type Preview struct {
 	refreshFunc         PreviewRefreshFunc
 	refreshing          bool
 	sortFunc            PreviewSortFunc
+	sidebarTitle        string
+	contentsTitle       string
+	sidebarPane         *paneStyle
+	contentsPane        *paneStyle
 	cacheGen            int
 	search              *searchState
 }
@@ -107,6 +111,14 @@ func WithPreviewRefreshFunc(fn PreviewRefreshFunc) PreviewOption {
 	}
 }
 
+// WithPaneTitles sets the titles shown in the sidebar and contents frames.
+func WithPaneTitles(sidebar, contents string) PreviewOption {
+	return func(p *Preview) {
+		p.sidebarTitle = sidebar
+		p.contentsTitle = contents
+	}
+}
+
 // WithPreviewSortFunc sets a function that is called to re-sort the sidebar
 // when a user presses 's' or 'S'.
 func WithPreviewSortFunc(fn PreviewSortFunc) PreviewOption {
@@ -151,7 +163,7 @@ func (pv *Preview) renderSidebar() {
 		}
 
 		cell := tview.NewTableCell(pad(d.Menu, 1)).
-			SetMaxWidth(sidebarMaxWidth).
+			SetMaxWidth(sidebarMaxWidth - 2).
 			SetStyle(style)
 
 		pv.sidebar.SetCell(i, 0, cell)
@@ -299,6 +311,7 @@ func (pv *Preview) init() {
 
 	pv.initLayout(pv.sidebar)
 	pv.initLayout(pv.contents.view)
+	pv.initPanes()
 }
 
 func (pv *Preview) initSidebar() {

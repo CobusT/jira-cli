@@ -22,6 +22,7 @@ type searchState struct {
 	term     string
 	startRow int
 	dir      int
+	active   bool
 }
 
 func newSearchState(footer tview.Primitive) *searchState {
@@ -58,6 +59,7 @@ func (pv *Preview) initSearch() {
 			target := pv.search.target
 			text := pv.search.input.GetText()
 
+			pv.search.active = false
 			pv.search.bottom.SwitchToPage("footer")
 			pv.screen.SetFocus(target)
 
@@ -84,6 +86,7 @@ func (pv *Preview) startSearch(target *tview.Table, dir int) {
 	pv.search.dir = dir
 	pv.search.input.SetLabel(map[int]string{searchDirForward: "/", searchDirBackward: "?"}[dir])
 	pv.search.input.SetText("")
+	pv.search.active = true
 	pv.search.bottom.SwitchToPage("search")
 	pv.screen.SetFocus(pv.search.input)
 }
