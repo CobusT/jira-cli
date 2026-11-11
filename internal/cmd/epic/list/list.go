@@ -188,15 +188,25 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 	cmdutil.ExitIfError(err)
 	userJQL := q.Params().JQL
 
-	epics, err := func() ([]*jira.Issue, error) {
-		s := cmdutil.Info("Fetching epics...")
-		defer s.Stop()
-
-		resp, err := api.ProxySearch(client, q.Get(), q.Params().From, q.Params().Limit)
+	// fetchEpics builds a fresh query each time since the issues func below
+	// mutates the shared query params for next-gen projects.
+	fetchEpics := func() ([]*jira.Issue, error) {
+		eq, err := query.NewIssue(project, flags)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := api.ProxySearch(client, eq.Get(), eq.Params().From, eq.Params().Limit)
 		if err != nil {
 			return nil, err
 		}
 		return resp.Issues, nil
+	}
+
+	epics, err := func() ([]*jira.Issue, error) {
+		s := cmdutil.Info("Fetching epics...")
+		defer s.Stop()
+
+		return fetchEpics()
 	}()
 	cmdutil.ExitIfError(err)
 
@@ -216,17 +226,26 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 		Project: project,
 		Server:  server,
 		Data:    epics,
+		// Issues is called concurrently from the TUI, so it must not share
+		// mutable state: it uses its own err and, for next-gen projects, its own query.
 		Issues: func(key string) []*jira.Issue {
-			var resp *jira.SearchResult
+			var (
+				resp *jira.SearchResult
+				err  error
+			)
 
 			if projectType == jira.ProjectTypeNextGen {
-				q.Params().Parent = key
-				q.Params().IssueType = ""
+				iq, qerr := query.NewIssue(project, flags)
+				if qerr != nil {
+					return []*jira.Issue{}
+				}
+				iq.Params().Parent = key
+				iq.Params().IssueType = ""
 				if openOnly {
-					q.Params().JQL = withOpenOnly(userJQL)
+					iq.Params().JQL = withOpenOnly(userJQL)
 				}
 
-				resp, err = client.Search(q.Get(), q.Params().Limit)
+				resp, err = client.Search(iq.Get(), iq.Params().Limit)
 			} else {
 				childJQL := ""
 				if openOnly {
@@ -239,6 +258,7 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 			}
 			return resp.Issues
 		},
+		Refresh: fetchEpics,
 		Display: view.DisplayFormat{
 			FixedColumns: fixedColumns,
 			TableStyle:   cmdutil.GetTUIStyleConfig(),

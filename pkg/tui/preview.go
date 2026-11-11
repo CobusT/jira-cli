@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/gdamore/tcell/v2"
@@ -16,6 +17,10 @@ type PreviewData struct {
 	Contents func(string) interface{}
 }
 
+// PreviewRefreshFunc reloads the preview data. It returns the new data and
+// the footer text to display with it.
+type PreviewRefreshFunc func() ([]PreviewData, string, error)
+
 // Preview is the preview layout.
 //
 // It contains 2 tables internally, viz: sidebar and contents.
@@ -30,6 +35,10 @@ type Preview struct {
 	footerText          string
 	sidebarSelectedFunc SelectedFunc
 	contentsCache       map[string]interface{}
+	refreshFunc         PreviewRefreshFunc
+	refreshing          bool
+	cacheGen            int
+	search              *searchState
 }
 
 // PreviewOption is a functional option that wraps preview properties.
@@ -84,6 +93,14 @@ func WithContentTableOpts(opts ...TableOption) PreviewOption {
 	}
 }
 
+// WithPreviewRefreshFunc sets a function that is called to reload the preview
+// data when a user presses 'r', 'CTRL+R' or 'F5'.
+func WithPreviewRefreshFunc(fn PreviewRefreshFunc) PreviewOption {
+	return func(p *Preview) {
+		p.refreshFunc = fn
+	}
+}
+
 // Paint paints the preview layout.
 func (pv *Preview) Paint(pd []PreviewData) error {
 	if len(pd) == 0 {
@@ -93,21 +110,27 @@ func (pv *Preview) Paint(pd []PreviewData) error {
 	pv.data = pd
 
 	pv.sidebar.SetSelectionChangedFunc(func(r, c int) {
-		pv.contents.view.Clear()
-		pv.printText("Loading...")
-
-		go pv.renderContents(pd[r])
+		pv.loadContents(r)
 	})
 
 	if pv.sidebarSelectedFunc != nil {
 		pv.sidebar.SetSelectedFunc(func(r, c int) {
-			if r > 0 {
-				pv.sidebarSelectedFunc(r, c, pd[r])
+			if r > 0 && r < len(pv.data) {
+				pv.sidebarSelectedFunc(r, c, pv.data[r])
 			}
 		})
 	}
 
-	for i, d := range pd {
+	pv.renderSidebar()
+	pv.printText(pv.initialText)
+
+	return pv.screen.Paint(pv.painter)
+}
+
+func (pv *Preview) renderSidebar() {
+	pv.sidebar.Clear()
+
+	for i, d := range pv.data {
 		style := tcell.StyleDefault
 		if i == 0 {
 			style = style.Bold(true)
@@ -119,38 +142,107 @@ func (pv *Preview) Paint(pd []PreviewData) error {
 
 		pv.sidebar.SetCell(i, 0, cell)
 	}
-
-	pv.printText(pv.initialText)
-
-	return pv.screen.Paint(pv.painter)
 }
 
-func (pv *Preview) renderContents(pd PreviewData) {
+// refresh reloads the preview data using the refresh func, clears the
+// contents cache and re-renders the sidebar while keeping the current selection.
+func (pv *Preview) refresh() {
+	if pv.refreshFunc == nil || pv.refreshing {
+		return
+	}
+	pv.refreshing = true
+	pv.footer.SetText(pad("Refreshing...", 1))
+
+	go func() {
+		data, footerText, err := pv.refreshFunc()
+
+		pv.screen.QueueUpdateDraw(func() {
+			pv.refreshing = false
+
+			if err != nil {
+				pv.footer.SetText(pad(fmt.Sprintf("Refresh failed: %s", err), 1))
+				return
+			}
+			if len(data) == 0 {
+				pv.footer.SetText(pad("Refresh returned no results; showing previous data", 1))
+				return
+			}
+
+			var selectedKey string
+			if sr, _ := pv.sidebar.GetSelection(); sr >= 0 && sr < len(pv.data) {
+				selectedKey = pv.data[sr].Key
+			}
+
+			pv.data = data
+			pv.contentsCache = make(map[string]interface{})
+			pv.cacheGen++
+			pv.footerText = footerText
+			pv.footer.SetText(pad(footerText, 1))
+			pv.renderSidebar()
+
+			row := 0
+			for i, d := range data {
+				if d.Key == selectedKey {
+					row = i
+					break
+				}
+			}
+			// Select always fires the selection changed func, which reloads the contents.
+			pv.sidebar.Select(row, 0)
+		})
+	}()
+}
+
+// loadContents shows the contents for the given sidebar row. It must be called
+// on the UI goroutine. Uncached contents are fetched in the background; the
+// cache is only touched and the result only drawn on the UI goroutine, and a
+// result is dropped if the selection moved on or the data was refreshed meanwhile.
+func (pv *Preview) loadContents(r int) {
+	if r < 0 || r >= len(pv.data) {
+		return
+	}
+	pd := pv.data[r]
+
+	pv.contents.view.Clear()
 	if pd.Contents == nil {
 		pv.printText("No contents defined.")
 		return
 	}
-
-	if _, ok := pv.contentsCache[pd.Key]; !ok {
-		pv.contentsCache[pd.Key] = pd.Contents(pd.Key)
+	if v, ok := pv.contentsCache[pd.Key]; ok {
+		pv.showContents(v)
+		return
 	}
 
-	switch v := pv.contentsCache[pd.Key].(type) {
-	case string:
-		pv.printText(v)
-	case TableData:
-		data := pv.contentsCache[pd.Key].(TableData)
+	pv.printText("Loading...")
+
+	gen := pv.cacheGen
+	go func() {
+		v := pd.Contents(pd.Key)
 
 		pv.screen.QueueUpdateDraw(func() {
-			pv.contents.view.Clear()
-
-			if len(data) == 1 {
-				pv.printText("No results to show.")
+			if gen != pv.cacheGen {
 				return
 			}
+			pv.contentsCache[pd.Key] = v
 
-			pv.contents.render(data)
+			if sr, _ := pv.sidebar.GetSelection(); sr >= 0 && sr < len(pv.data) && pv.data[sr].Key == pd.Key {
+				pv.contents.view.Clear()
+				pv.showContents(v)
+			}
 		})
+	}()
+}
+
+func (pv *Preview) showContents(v interface{}) {
+	switch data := v.(type) {
+	case string:
+		pv.printText(data)
+	case TableData:
+		if len(data) == 1 {
+			pv.printText("No results to show.")
+			return
+		}
+		pv.contents.render(data)
 	}
 }
 
@@ -158,13 +250,15 @@ func (pv *Preview) init() {
 	pv.initSidebar()
 	pv.initContents()
 	pv.initFooter()
+	pv.search = newSearchState(pv.footer)
+	pv.initSearch()
 
 	grid := tview.NewGrid().
 		SetRows(0, 1, 2).
 		SetColumns(sidebarMaxWidth, 1, 0).
 		AddItem(pv.sidebar, 0, 0, 2, 1, 0, 0, true).
 		AddItem(pv.contents.view, 0, 2, 2, 1, 0, 0, false).
-		AddItem(pv.footer, 2, 0, 1, 3, 0, 0, false)
+		AddItem(pv.search.bottom, 2, 0, 1, 3, 0, 0, false)
 
 	pv.painter = tview.NewPages().
 		AddPage("primary", grid, true, true).
@@ -178,6 +272,10 @@ func (pv *Preview) initSidebar() {
 	pv.sidebar.
 		SetSelectable(true, false).
 		SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+			if ev.Key() == tcell.KeyCtrlR || ev.Key() == tcell.KeyF5 {
+				pv.refresh()
+				return nil
+			}
 			if ev.Key() == tcell.KeyTab {
 				pv.screen.SetFocus(pv.contents.view)
 				pv.contents.view.SetSelectable(true, false).Select(1, 0)
@@ -190,6 +288,21 @@ func (pv *Preview) initSidebar() {
 				case 'w':
 					pv.screen.SetFocus(pv.contents.view)
 					pv.contents.view.SetSelectable(true, false).Select(1, 0)
+				case 'r':
+					pv.refresh()
+					return nil
+				case '/':
+					pv.startSearch(pv.sidebar, searchDirForward)
+					return nil
+				case '?':
+					pv.startSearch(pv.sidebar, searchDirBackward)
+					return nil
+				case 'n':
+					pv.searchNext(pv.sidebar, false)
+					return nil
+				case 'N':
+					pv.searchNext(pv.sidebar, true)
+					return nil
 				default:
 					pv.contents.view.SetSelectable(false, false)
 				}
@@ -206,6 +319,10 @@ func (pv *Preview) initContents() {
 			contents := func() interface{} {
 				sr, _ := pv.sidebar.GetSelection()
 				return pv.contentsCache[pv.data[sr].Key]
+			}
+			if ev.Key() == tcell.KeyCtrlR || ev.Key() == tcell.KeyF5 {
+				pv.refresh()
+				return nil
 			}
 			if ev.Key() == tcell.KeyCtrlK {
 				if pv.contents.copyKeyFunc == nil {
@@ -226,6 +343,21 @@ func (pv *Preview) initContents() {
 				case 'w':
 					pv.screen.SetFocus(pv.sidebar)
 					pv.contents.view.SetSelectable(false, false)
+				case 'r':
+					pv.refresh()
+					return nil
+				case '/':
+					pv.startSearch(pv.contents.view, searchDirForward)
+					return nil
+				case '?':
+					pv.startSearch(pv.contents.view, searchDirBackward)
+					return nil
+				case 'n':
+					pv.searchNext(pv.contents.view, false)
+					return nil
+				case 'N':
+					pv.searchNext(pv.contents.view, true)
+					return nil
 				case 'c':
 					if pv.contents.copyFunc == nil {
 						break

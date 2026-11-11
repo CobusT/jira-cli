@@ -12,12 +12,16 @@ import (
 // EpicIssueFunc provides issues for the epic.
 type EpicIssueFunc func(string) []*jira.Issue
 
+// EpicRefreshFunc reloads the list of epics.
+type EpicRefreshFunc func() ([]*jira.Issue, error)
+
 // EpicList is a list view for epics.
 type EpicList struct {
 	Project string
 	Server  string
 	Data    []*jira.Issue
 	Issues  EpicIssueFunc
+	Refresh EpicRefreshFunc
 	Display DisplayFormat
 }
 
@@ -31,9 +35,9 @@ func (el *EpicList) Render() error {
 	}
 
 	data := el.data()
-	view := tui.NewPreview(
-		tui.WithPreviewFooterText(fmt.Sprintf("Showing %d results for project %q", len(el.Data), el.Project)),
-		tui.WithInitialText(helpText),
+	opts := []tui.PreviewOption{
+		tui.WithPreviewFooterText(el.footerText()),
+		tui.WithInitialText(el.helpText()),
 		tui.WithSidebarSelectedFunc(navigate(el.Server)),
 		tui.WithContentTableOpts(
 			tui.WithTableStyle(el.Display.TableStyle),
@@ -59,9 +63,30 @@ func (el *EpicList) Render() error {
 			tui.WithCopyFunc(copyURL(el.Server)),
 			tui.WithCopyKeyFunc(copyKey()),
 		),
-	)
+	}
+	if el.Refresh != nil {
+		opts = append(opts, tui.WithPreviewRefreshFunc(func() ([]tui.PreviewData, string, error) {
+			epics, err := el.Refresh()
+			if err != nil {
+				return nil, "", err
+			}
+			el.Data = epics
+			return el.data(), el.footerText(), nil
+		}))
+	}
 
-	return view.Paint(data)
+	return tui.NewPreview(opts...).Paint(data)
+}
+
+func (el *EpicList) footerText() string {
+	return fmt.Sprintf("Showing %d results for project %q", len(el.Data), el.Project)
+}
+
+func (el *EpicList) helpText() string {
+	if el.Refresh == nil {
+		return helpText
+	}
+	return helpText + "\n\n\tPress 'r' (or 'CTRL+R' / 'F5') to refresh the epics and their issues."
 }
 
 func (el *EpicList) data() []tui.PreviewData {
@@ -71,7 +96,7 @@ func (el *EpicList) data() []tui.PreviewData {
 		Key:  "help",
 		Menu: "?",
 		Contents: func(_ string) any {
-			return helpText
+			return el.helpText()
 		},
 	})
 	for _, issue := range el.Data {

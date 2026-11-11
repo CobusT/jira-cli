@@ -40,6 +40,11 @@ const (
 	  - Press 'CTRL+K' to copy issue key to the system clipboard.
 	  - Hit ENTER to open the selected issue in a browser.
 	
+	Search (works in both the sidebar and the contents screen):
+	  - Press '/' to search forward or '?' to search backward, then ENTER to confirm or ESC to cancel.
+	  - Press 'n' / 'SHIFT+N' to jump to the next / previous match.
+	  - Matching ignores case unless the search term contains an uppercase letter.
+	
 	Press 'q' / ESC / CTRL+C to quit.`
 
 	tableHelpText = `[default]ACTIONS AVAILABLE IN THE TUI
