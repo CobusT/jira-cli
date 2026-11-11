@@ -20,7 +20,11 @@ const (
 	helpText = `List lists top 100 epics.
 
 By default epics are displayed in an explorer view. You can use --table
-and --plain flags to display output in different modes.`
+and --plain flags to display output in different modes.
+
+Issues within an epic are filtered to open ones (status category is not Done)
+by default. Use --include-done to show all issues, or pass --status/--resolution
+to filter explicitly.`
 
 	examples = `# Display epics in an explorer view
 $ jira epic list
@@ -36,6 +40,9 @@ $ jira epic list <KEY> --plain
 # Display epics or epic issues in a plain table view without headers
 $ jira epic list --table --plain --no-headers
 $ jira epic list <KEY> --plain --no-headers
+
+# Include done issues when listing issues in an epic
+$ jira epic list <KEY> --include-done
 
 # Display some columns of epic or epic issues in a plain table view
 $ jira epic list --table --plain --columns key,summary,status
@@ -97,6 +104,9 @@ func singleEpicView(flags query.FlagParser, key, project, projectType, server st
 
 		q, err := query.NewIssue(project, flags)
 		if err != nil {
+			return nil, err
+		}
+		if err := applyOpenOnlyFilter(flags, q); err != nil {
 			return nil, err
 		}
 
@@ -176,6 +186,7 @@ func singleEpicView(flags query.FlagParser, key, project, projectType, server st
 func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, projectType, server string, client *jira.Client) {
 	q, err := query.NewIssue(project, flags)
 	cmdutil.ExitIfError(err)
+	userJQL := q.Params().JQL
 
 	epics, err := func() ([]*jira.Issue, error) {
 		s := cmdutil.Info("Fetching epics...")
@@ -198,6 +209,9 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 	fixedColumns, err := flags.GetUint("fixed-columns")
 	cmdutil.ExitIfError(err)
 
+	openOnly, err := isOpenOnly(flags)
+	cmdutil.ExitIfError(err)
+
 	v := view.EpicList{
 		Project: project,
 		Server:  server,
@@ -208,10 +222,17 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 			if projectType == jira.ProjectTypeNextGen {
 				q.Params().Parent = key
 				q.Params().IssueType = ""
+				if openOnly {
+					q.Params().JQL = withOpenOnly(userJQL)
+				}
 
 				resp, err = client.Search(q.Get(), q.Params().Limit)
 			} else {
-				resp, err = client.EpicIssues(key, "", q.Params().From, q.Params().Limit)
+				childJQL := ""
+				if openOnly {
+					childJQL = openOnlyJQL
+				}
+				resp, err = client.EpicIssues(key, childJQL, q.Params().From, q.Params().Limit)
 			}
 			if err != nil {
 				return []*jira.Issue{}
@@ -238,9 +259,52 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 	}
 }
 
+const openOnlyJQL = "statusCategory != Done"
+
+// isOpenOnly reports whether epic child issues should be limited to open ones.
+// This is the default unless --include-done is passed or the user filters by
+// status or resolution explicitly.
+func isOpenOnly(flags query.FlagParser) (bool, error) {
+	includeDone, err := flags.GetBool("include-done")
+	if err != nil {
+		return false, err
+	}
+	if includeDone {
+		return false, nil
+	}
+	status, err := flags.GetStringArray("status")
+	if err != nil {
+		return false, err
+	}
+	resolution, err := flags.GetString("resolution")
+	if err != nil {
+		return false, err
+	}
+	return len(status) == 0 && resolution == "", nil
+}
+
+func withOpenOnly(jql string) string {
+	if jql == "" {
+		return openOnlyJQL
+	}
+	return fmt.Sprintf("(%s) AND %s", jql, openOnlyJQL)
+}
+
+func applyOpenOnlyFilter(flags query.FlagParser, q *query.Issue) error {
+	openOnly, err := isOpenOnly(flags)
+	if err != nil {
+		return err
+	}
+	if openOnly {
+		q.Params().JQL = withOpenOnly(q.Params().JQL)
+	}
+	return nil
+}
+
 func setFlags(cmd *cobra.Command) {
 	list.SetFlags(cmd)
 	cmd.Flags().Bool("table", false, "Display epics in table view")
+	cmd.Flags().Bool("include-done", false, "Include done issues when listing issues in an epic (default shows only open issues)")
 }
 
 func hideFlags(cmd *cobra.Command) {
