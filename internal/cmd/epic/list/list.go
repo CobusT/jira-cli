@@ -33,7 +33,9 @@ The default sort order of epics can be set in the config file, eg:
     order: asc       # asc or desc; defaults to asc for rank, desc otherwise
 
 The --order-by and --reverse flags take precedence over the config. In the
-explorer view, press 's' to cycle the sort field and 'S' to reverse it.
+explorer view, press 's' to cycle the sort field and 'S' to reverse it. They
+sort the focused pane: epics in the sidebar, issues in the issues pane (or,
+in the tree layout, issues when an issue row is selected).
 
 The explorer has two layouts: "panes" (epics on the left, the selected epic's
 issues on the right) and "tree" (a single list where TAB expands an epic in

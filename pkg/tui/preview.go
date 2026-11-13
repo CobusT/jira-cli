@@ -26,6 +26,11 @@ type PreviewRefreshFunc func() ([]PreviewData, string, error)
 // returns the sorted data and the footer text to display with it.
 type PreviewSortFunc func(reverse bool) ([]PreviewData, string)
 
+// ContentsSortFunc changes the sort of the contents pane when a user presses
+// 's' (next sort field) or 'S' (reverse sort order) there. It returns the
+// footer text to display; the contents are then reloaded with Contents.
+type ContentsSortFunc func(reverse bool) string
+
 // Preview is the preview layout.
 //
 // It contains 2 tables internally, viz: sidebar and contents.
@@ -43,15 +48,19 @@ type Preview struct {
 	refreshFunc         PreviewRefreshFunc
 	refreshing          bool
 	sortFunc            PreviewSortFunc
-	sidebarTitle        string
-	contentsTitle       string
-	sidebarPane         *paneStyle
-	sidebarViewFunc     ViewFunc
-	switchLayoutFunc    SwitchLayoutFunc
-	initialKey          string
-	contentsPane        *paneStyle
-	cacheGen            int
-	search              *searchState
+	contentsSortFunc    ContentsSortFunc
+	// reselectKey is the key of the contents row to select once the
+	// contents are reloaded after a sort.
+	reselectKey      string
+	sidebarTitle     string
+	contentsTitle    string
+	sidebarPane      *paneStyle
+	sidebarViewFunc  ViewFunc
+	switchLayoutFunc SwitchLayoutFunc
+	initialKey       string
+	contentsPane     *paneStyle
+	cacheGen         int
+	search           *searchState
 }
 
 // PreviewOption is a functional option that wraps preview properties.
@@ -156,6 +165,14 @@ func WithPaneTitles(sidebar, contents string) PreviewOption {
 func WithPreviewSortFunc(fn PreviewSortFunc) PreviewOption {
 	return func(p *Preview) {
 		p.sortFunc = fn
+	}
+}
+
+// WithContentsSortFunc sets a function that is called to re-sort the contents
+// pane when a user presses 's' or 'S' there. Without it, the keys sort the sidebar.
+func WithContentsSortFunc(fn ContentsSortFunc) PreviewOption {
+	return func(p *Preview) {
+		p.contentsSortFunc = fn
 	}
 }
 
@@ -264,6 +281,36 @@ func (pv *Preview) sort(reverse bool) {
 	pv.setData(data, footerText, false)
 }
 
+// sortContents re-sorts the contents pane using the contents sort func and
+// reloads the contents, keeping the selected row's key selected.
+func (pv *Preview) sortContents(reverse bool) {
+	if pv.contentsSortFunc == nil {
+		pv.sort(reverse)
+		return
+	}
+	sr, _ := pv.sidebar.GetSelection()
+	if sr < 0 || sr >= len(pv.data) {
+		return
+	}
+	pv.reselectKey = ""
+	if data, ok := pv.contentsCache[pv.data[sr].Key].(TableData); ok {
+		r, _ := pv.contents.view.GetSelection()
+		if idx := data.GetIndex("KEY"); idx >= 0 && r > 0 && r < len(data) {
+			pv.reselectKey = data.Get(r, idx)
+		}
+	}
+
+	pv.setFooter(pv.contentsSortFunc(reverse))
+	pv.contentsCache = make(map[string]interface{})
+	pv.cacheGen++
+	pv.loadContents(sr)
+}
+
+func (pv *Preview) setFooter(text string) {
+	pv.footerText = text
+	pv.footer.SetText(pad(text, 1))
+}
+
 // setData replaces the sidebar data while keeping the current selection. It
 // must be called on the UI goroutine. When resetCache is set, cached contents
 // are discarded.
@@ -278,8 +325,7 @@ func (pv *Preview) setData(data []PreviewData, footerText string, resetCache boo
 		pv.contentsCache = make(map[string]interface{})
 		pv.cacheGen++
 	}
-	pv.footerText = footerText
-	pv.footer.SetText(pad(footerText, 1))
+	pv.setFooter(footerText)
 	pv.renderSidebar()
 
 	row := 0
@@ -343,7 +389,28 @@ func (pv *Preview) showContents(v interface{}) {
 			return
 		}
 		pv.contents.render(data)
+		pv.applyReselect(data)
 	}
+}
+
+// applyReselect selects the contents row with the key saved by sortContents.
+func (pv *Preview) applyReselect(data TableData) {
+	key := pv.reselectKey
+	if key == "" {
+		return
+	}
+	pv.reselectKey = ""
+	idx := data.GetIndex("KEY")
+	if idx < 0 {
+		return
+	}
+	for r := 1; r < len(data); r++ {
+		if data.Get(r, idx) == key {
+			pv.contents.view.Select(r, 0)
+			return
+		}
+	}
+	pv.contents.view.Select(1, 0)
 }
 
 func (pv *Preview) init() {
@@ -457,10 +524,10 @@ func (pv *Preview) initContents() {
 					pv.refresh()
 					return nil
 				case 's':
-					pv.sort(false)
+					pv.sortContents(false)
 					return nil
 				case 'S':
-					pv.sort(true)
+					pv.sortContents(true)
 					return nil
 				case 'V':
 					pv.switchLayout()

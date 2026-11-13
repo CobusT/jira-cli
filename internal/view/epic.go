@@ -52,9 +52,9 @@ type EpicList struct {
 
 	// stateMu guards Data and the sort state, which refreshes update from
 	// background goroutines while the UI reads them.
-	stateMu      sync.RWMutex
-	sortIdx      int
-	sortReversed bool
+	stateMu   sync.RWMutex
+	epicSort  sortState
+	issueSort sortState
 
 	issuesMu    sync.Mutex
 	issuesCache map[string][]*jira.Issue
@@ -121,6 +121,14 @@ func (el *EpicList) issuesFor(key string) []*jira.Issue {
 	el.issuesMu.Unlock()
 
 	return issues
+}
+
+// cachedIssues returns the issues of the given epic if they are loaded.
+func (el *EpicList) cachedIssues(key string) ([]*jira.Issue, bool) {
+	el.issuesMu.Lock()
+	defer el.issuesMu.Unlock()
+	issues, ok := el.issuesCache[key]
+	return issues, ok
 }
 
 func (el *EpicList) clearIssuesCache() {
@@ -195,10 +203,16 @@ func (el *EpicList) renderPanes(renderer *glamour.TermRenderer, selected string,
 			return el.data(), el.footerText(), nil
 		}))
 	}
-	opts = append(opts, tui.WithPreviewSortFunc(func(reverse bool) ([]tui.PreviewData, string) {
-		el.cycleSort(reverse)
-		return el.data(), el.footerText()
-	}))
+	opts = append(opts,
+		tui.WithPreviewSortFunc(func(reverse bool) ([]tui.PreviewData, string) {
+			el.cycleSort(reverse)
+			return el.data(), el.footerText()
+		}),
+		tui.WithContentsSortFunc(func(reverse bool) string {
+			el.cycleIssueSort(reverse)
+			return el.footerText()
+		}),
+	)
 
 	return tui.NewPreview(opts...).Paint(data)
 }
@@ -230,6 +244,16 @@ func (el *EpicList) treeRoots() []tui.TreeRow {
 	return rows
 }
 
+// treeChildren returns the tree rows of an epic's issues in the issue sort order.
+func (el *EpicList) treeChildren(issues []*jira.Issue) []tui.TreeRow {
+	sorted := el.sortedIssues(issues)
+	rows := make([]tui.TreeRow, 0, len(sorted))
+	for _, i := range sorted {
+		rows = append(rows, el.treeRow(i))
+	}
+	return rows
+}
+
 func (el *EpicList) treeHelpText() string {
 	help := "TAB/→/l: expand · ←/h: collapse · v: view · ENTER: open · c/CTRL+K: copy URL/key · /: search · s/S: sort"
 	if el.Refresh != nil {
@@ -252,16 +276,22 @@ func (el *EpicList) renderTree(renderer *glamour.TermRenderer, selected string, 
 		tui.WithTreeInitialSelection(selected),
 		tui.WithTreeExpanded(el.treeExpanded),
 		tui.WithTreeChildrenFunc(func(key string) []tui.TreeRow {
-			issues := el.issuesFor(key)
-			rows := make([]tui.TreeRow, 0, len(issues))
-			for _, i := range issues {
-				rows = append(rows, el.treeRow(i))
-			}
-			return rows
+			return el.treeChildren(el.issuesFor(key))
 		}),
 		tui.WithTreeSortFunc(func(reverse bool) ([]tui.TreeRow, string) {
 			el.cycleSort(reverse)
 			return el.treeRoots(), el.footerText()
+		}),
+		tui.WithTreeChildSortFunc(func(reverse bool, roots []string) (map[string][]tui.TreeRow, string) {
+			el.cycleIssueSort(reverse)
+			children := make(map[string][]tui.TreeRow, len(roots))
+			for _, key := range roots {
+				// Only re-sort loaded issues; never fetch on the UI goroutine.
+				if issues, ok := el.cachedIssues(key); ok {
+					children[key] = el.treeChildren(issues)
+				}
+			}
+			return children, el.footerText()
 		}),
 		tui.WithTreeViewFunc(func(key string) (string, error) {
 			return el.viewIssue(renderer, key)
@@ -296,14 +326,16 @@ func (el *EpicList) epicCount() int {
 }
 
 func (el *EpicList) footerText() string {
-	return fmt.Sprintf("Showing %d results for project %q · sorted by %s (s: next sort, S: reverse)",
-		el.epicCount(), el.Project, el.sortLabel())
+	return fmt.Sprintf("Showing %d results for project %q · epics sorted by %s · issues sorted by %s (s: next sort, S: reverse)",
+		el.epicCount(), el.Project, el.sortLabel(), el.issueSortLabel())
 }
 
 func (el *EpicList) helpText() string {
-	epicHelp := "\n\tEpics (from either screen):" +
-		"\n\t  - Press 's' to cycle the sort field (default, updated, created, status, key, summary)." +
-		"\n\t  - Press 'SHIFT+S' to reverse the sort order." +
+	epicHelp := "\n\tEpics:" +
+		"\n\t  - Press 's' to cycle the sort field (default, updated, created, status, key, summary)" +
+		"\n\t    of the focused pane: epics in the sidebar, issues in the issues pane." +
+		"\n\t    In the single list view, it sorts the issues when an issue is selected." +
+		"\n\t  - Press 'SHIFT+S' to reverse the sort order of the focused pane." +
 		"\n\t  - Press 'v' in the sidebar to view the selected epic's details." +
 		"\n\t  - Press 'SHIFT+V' to switch to the single list view, where TAB expands an epic in place."
 	if el.Refresh != nil {
@@ -329,8 +361,7 @@ func (el *EpicList) data() []tui.PreviewData {
 			Key:  issue.Key,
 			Menu: fmt.Sprintf("➤ %s: %s", issue.Key, prepareTitle(issue.Fields.Summary)),
 			Contents: func(key string) any {
-				issues := el.issuesFor(key)
-				return el.tabularize(issues)
+				return el.tabularize(el.sortedIssues(el.issuesFor(key)))
 			},
 		})
 	}

@@ -26,6 +26,12 @@ type TreeRefreshFunc func() ([]TreeRow, string, error)
 // the sorted roots and footer text.
 type TreeSortFunc func(reverse bool) ([]TreeRow, string)
 
+// TreeChildSortFunc changes the sort of children when a user presses 's' or
+// 'S' on a child row. It is given the keys of the roots whose children are
+// loaded and returns their re-sorted children and the footer text. Roots
+// missing from the result keep their children as they are.
+type TreeChildSortFunc func(reverse bool, roots []string) (map[string][]TreeRow, string)
+
 // TreeKeyFunc is called with the key of the selected row.
 type TreeKeyFunc func(key string)
 
@@ -75,6 +81,7 @@ type Tree struct {
 	childrenFunc     TreeChildrenFunc
 	refreshFunc      TreeRefreshFunc
 	sortFunc         TreeSortFunc
+	childSortFunc    TreeChildSortFunc
 	viewFunc         ViewFunc
 	openFunc         TreeKeyFunc
 	copyURLFunc      TreeKeyFunc
@@ -152,6 +159,12 @@ func WithTreeRefreshFunc(fn TreeRefreshFunc) TreeOption {
 
 // WithTreeSortFunc sets the function called on 's' and 'S'.
 func WithTreeSortFunc(fn TreeSortFunc) TreeOption { return func(t *Tree) { t.sortFunc = fn } }
+
+// WithTreeChildSortFunc sets the function called on 's' and 'S' when a child
+// row is selected. Without it, the keys sort the roots.
+func WithTreeChildSortFunc(fn TreeChildSortFunc) TreeOption {
+	return func(t *Tree) { t.childSortFunc = fn }
+}
 
 // WithTreeViewFunc sets the function that renders the details of a row on 'v'.
 func WithTreeViewFunc(fn ViewFunc) TreeOption { return func(t *Tree) { t.viewFunc = fn } }
@@ -283,7 +296,11 @@ func (t *Tree) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 			t.refresh()
 			return nil
 		case 's', 'S':
-			t.sort(ev.Rune() == 'S')
+			if ok && line.kind == treeLineChild && t.childSortFunc != nil {
+				t.sortChildren(ev.Rune() == 'S')
+			} else {
+				t.sort(ev.Rune() == 'S')
+			}
 			return nil
 		case 'v':
 			if ok && line.kind != treeLinePlaceholder && t.viewFunc != nil {
@@ -414,6 +431,21 @@ func (t *Tree) sort(reverse bool) {
 	}
 	roots, footerText := t.sortFunc(reverse)
 	t.roots = roots
+	t.setFooter(footerText)
+	t.render()
+}
+
+func (t *Tree) sortChildren(reverse bool) {
+	roots := make([]string, 0, len(t.children))
+	for key := range t.children {
+		roots = append(roots, key)
+	}
+	children, footerText := t.childSortFunc(reverse, roots)
+	for key, rows := range children {
+		if _, ok := t.children[key]; ok {
+			t.children[key] = rows
+		}
+	}
 	t.setFooter(footerText)
 	t.render()
 }

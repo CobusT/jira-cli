@@ -10,11 +10,12 @@ import (
 	"github.com/ankitpokhrel/jira-cli/pkg/jira"
 )
 
-// epicSortField is a client-side sort field for the epic explorer.
+// epicSortField is a client-side sort field for epics and their issues in
+// the epic explorer.
 type epicSortField struct {
 	name string
 	// less reports whether a sorts before b in the field's default direction.
-	// A nil less keeps the order the epics were fetched in.
+	// A nil less keeps the order the issues were fetched in.
 	less func(a, b *jira.Issue) bool
 	// desc reports whether the field's default direction is descending; used
 	// only for the direction arrow in the footer.
@@ -44,63 +45,103 @@ var epicSortFields = []epicSortField{
 	}},
 }
 
-// sortedEpics returns a copy of the epics sorted by the current sort field.
-func (el *EpicList) sortedEpics() []*jira.Issue {
-	el.stateMu.RLock()
-	defer el.stateMu.RUnlock()
-
-	epics := make([]*jira.Issue, len(el.Data))
-	copy(epics, el.Data)
-
-	field := epicSortFields[el.sortIdx]
-	if field.less != nil {
-		sort.SliceStable(epics, func(i, j int) bool {
-			return field.less(epics[i], epics[j])
-		})
-	}
-	if el.sortReversed {
-		for i, j := 0, len(epics)-1; i < j; i, j = i+1, j-1 {
-			epics[i], epics[j] = epics[j], epics[i]
-		}
-	}
-	return epics
+// sortState is the client-side sort of a list of issues.
+type sortState struct {
+	idx      int
+	reversed bool
 }
 
-// cycleSort selects the next sort field, or reverses the order when reverse is set.
-func (el *EpicList) cycleSort(reverse bool) {
-	el.stateMu.Lock()
-	defer el.stateMu.Unlock()
-
+// cycle selects the next sort field, or reverses the order when reverse is set.
+func (s *sortState) cycle(reverse bool) {
 	if reverse {
-		el.sortReversed = !el.sortReversed
+		s.reversed = !s.reversed
 		return
 	}
-	el.sortIdx = (el.sortIdx + 1) % len(epicSortFields)
-	el.sortReversed = false
+	s.idx = (s.idx + 1) % len(epicSortFields)
+	s.reversed = false
 }
 
-// sortLabel describes the current sort, eg: "updated ↓".
-func (el *EpicList) sortLabel() string {
-	el.stateMu.RLock()
-	defer el.stateMu.RUnlock()
+// apply returns a copy of issues sorted by the sort state.
+func (s sortState) apply(issues []*jira.Issue) []*jira.Issue {
+	sorted := make([]*jira.Issue, len(issues))
+	copy(sorted, issues)
 
-	if el.sortIdx == 0 {
-		label := el.DefaultOrder
+	field := epicSortFields[s.idx]
+	if field.less != nil {
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return field.less(sorted[i], sorted[j])
+		})
+	}
+	if s.reversed {
+		for i, j := 0, len(sorted)-1; i < j; i, j = i+1, j-1 {
+			sorted[i], sorted[j] = sorted[j], sorted[i]
+		}
+	}
+	return sorted
+}
+
+// label describes the sort, eg: "updated ↓". defaultLabel describes the
+// order the issues were fetched in.
+func (s sortState) label(defaultLabel string) string {
+	if s.idx == 0 {
+		label := defaultLabel
 		if label == "" {
 			label = "default"
 		}
-		if el.sortReversed {
+		if s.reversed {
 			label += " (reversed)"
 		}
 		return label
 	}
-	field := epicSortFields[el.sortIdx]
-	desc := field.desc != el.sortReversed
+	field := epicSortFields[s.idx]
 	arrow := "↑"
-	if desc {
+	if field.desc != s.reversed {
 		arrow = "↓"
 	}
 	return fmt.Sprintf("%s %s", field.name, arrow)
+}
+
+// sortedEpics returns a copy of the epics sorted by the current epic sort.
+func (el *EpicList) sortedEpics() []*jira.Issue {
+	el.stateMu.RLock()
+	defer el.stateMu.RUnlock()
+	return el.epicSort.apply(el.Data)
+}
+
+// sortedIssues returns a copy of the issues sorted by the current issue sort.
+func (el *EpicList) sortedIssues(issues []*jira.Issue) []*jira.Issue {
+	el.stateMu.RLock()
+	defer el.stateMu.RUnlock()
+	return el.issueSort.apply(issues)
+}
+
+// cycleSort changes the epic sort: the next field, or the reverse order when
+// reverse is set.
+func (el *EpicList) cycleSort(reverse bool) {
+	el.stateMu.Lock()
+	defer el.stateMu.Unlock()
+	el.epicSort.cycle(reverse)
+}
+
+// cycleIssueSort changes the sort of the issues within epics.
+func (el *EpicList) cycleIssueSort(reverse bool) {
+	el.stateMu.Lock()
+	defer el.stateMu.Unlock()
+	el.issueSort.cycle(reverse)
+}
+
+// sortLabel describes the current epic sort, eg: "updated ↓".
+func (el *EpicList) sortLabel() string {
+	el.stateMu.RLock()
+	defer el.stateMu.RUnlock()
+	return el.epicSort.label(el.DefaultOrder)
+}
+
+// issueSortLabel describes the current sort of issues within epics.
+func (el *EpicList) issueSortLabel() string {
+	el.stateMu.RLock()
+	defer el.stateMu.RUnlock()
+	return el.issueSort.label("")
 }
 
 // statusCategoryRank orders statuses by workflow: to do, in progress, done.

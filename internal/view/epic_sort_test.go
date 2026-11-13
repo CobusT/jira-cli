@@ -64,3 +64,35 @@ func TestEpicSort(t *testing.T) {
 	// Sorting must not reorder the fetched data.
 	assert.Equal(t, []string{"BART-10", "BART-9", "BART-100"}, epicKeys(el.Data))
 }
+
+func TestEpicIssueSortIsIndependent(t *testing.T) {
+	issues := []*jira.Issue{
+		newSortTestEpic("BART-2", "beta", "To Do", "new", "2026-01-01T10:00:00.000-0800", "2026-01-05T10:00:00.000-0800"),
+		newSortTestEpic("BART-1", "alpha", "To Do", "new", "2026-01-02T10:00:00.000-0800", "2026-01-04T10:00:00.000-0800"),
+	}
+	el := &EpicList{
+		DefaultOrder: "rank ↑",
+		Data:         issues,
+	}
+
+	assert.Equal(t, "default", el.issueSortLabel())
+	assert.Equal(t, []string{"BART-2", "BART-1"}, epicKeys(el.sortedIssues(issues)))
+
+	el.cycleIssueSort(false) // updated ↓
+	el.cycleIssueSort(false) // created ↓
+	assert.Equal(t, "created ↓", el.issueSortLabel())
+	assert.Equal(t, []string{"BART-1", "BART-2"}, epicKeys(el.sortedIssues(issues)))
+
+	el.cycleIssueSort(true)
+	assert.Equal(t, "created ↑", el.issueSortLabel())
+	assert.Equal(t, []string{"BART-2", "BART-1"}, epicKeys(el.sortedIssues(issues)))
+
+	// The epic sort is untouched.
+	assert.Equal(t, "rank ↑", el.sortLabel())
+	assert.Equal(t, []string{"BART-2", "BART-1"}, epicKeys(el.sortedEpics()))
+
+	// Changing the epic sort leaves the issue sort alone.
+	el.cycleSort(false)
+	assert.Equal(t, "updated ↓", el.sortLabel())
+	assert.Equal(t, "created ↑", el.issueSortLabel())
+}
