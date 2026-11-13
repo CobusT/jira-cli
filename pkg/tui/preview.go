@@ -61,6 +61,9 @@ type Preview struct {
 	contentsPane     *paneStyle
 	cacheGen         int
 	search           *searchState
+	rowActions       map[rune]RowAction
+	dataFunc         func() ([]PreviewData, string)
+	actions          *actionHost
 }
 
 // PreviewOption is a functional option that wraps preview properties.
@@ -174,6 +177,75 @@ func WithContentsSortFunc(fn ContentsSortFunc) PreviewOption {
 	return func(p *Preview) {
 		p.contentsSortFunc = fn
 	}
+}
+
+// WithPreviewRowActions sets actions run when a user presses their key in
+// either pane. In the sidebar the target is the selected item; in the contents
+// pane it is the selected row, keyed by its KEY column.
+func WithPreviewRowActions(actions map[rune]RowAction) PreviewOption {
+	return func(p *Preview) {
+		p.rowActions = actions
+	}
+}
+
+// WithPreviewDataFunc sets a function that returns the current data and footer
+// text. Row actions use it to reload the layout after a change.
+func WithPreviewDataFunc(fn func() ([]PreviewData, string)) PreviewOption {
+	return func(p *Preview) {
+		p.dataFunc = fn
+	}
+}
+
+// previewUI is the ActionUI of the preview layout.
+type previewUI struct {
+	*actionHost
+	pv *Preview
+}
+
+func (u previewUI) Reload(_ []string, selectKey string) {
+	u.pv.reload(selectKey)
+}
+
+// reload rebuilds the sidebar from the data func and reloads the contents,
+// selecting the contents row with selectKey when the contents pane has focus.
+func (pv *Preview) reload(selectKey string) {
+	if pv.dataFunc == nil {
+		return
+	}
+	data, footerText := pv.dataFunc()
+	pv.contentsCache = make(map[string]interface{})
+	pv.cacheGen++
+	if pv.screen.GetFocus() == pv.contents.view {
+		pv.reselectKey = selectKey
+	}
+	pv.setData(data, footerText, false)
+}
+
+// runRowAction runs the row action for the key, if any. It reports whether
+// the key was handled.
+func (pv *Preview) runRowAction(r rune, inContents bool) bool {
+	action, ok := pv.rowActions[r]
+	if !ok {
+		return false
+	}
+	sr, _ := pv.sidebar.GetSelection()
+	if sr <= 0 || sr >= len(pv.data) {
+		return true // The help item.
+	}
+	parent := pv.data[sr].Key
+	target := RowTarget{Key: parent, Parent: parent, IsParent: true}
+
+	if inContents {
+		target = RowTarget{Parent: parent}
+		if data, ok := pv.contentsCache[parent].(TableData); ok {
+			r, _ := pv.contents.view.GetSelection()
+			if idx := data.GetIndex("KEY"); idx >= 0 && r > 0 && r < len(data) {
+				target.Key = data.Get(r, idx)
+			}
+		}
+	}
+	action(previewUI{actionHost: pv.actions, pv: pv}, target)
+	return true
 }
 
 // Paint paints the preview layout.
@@ -430,6 +502,13 @@ func (pv *Preview) init() {
 		AddPage("primary", grid, true, true).
 		AddPage("secondary", getInfoModal(), true, false)
 
+	pv.actions = &actionHost{
+		screen:  pv.screen,
+		pages:   pv.painter,
+		footer:  pv.footer,
+		restore: func() { pv.footer.SetText(pad(pv.footerText, 1)) },
+	}
+
 	pv.initLayout(pv.sidebar)
 	pv.initLayout(pv.contents.view)
 	pv.initPanes()
@@ -446,6 +525,9 @@ func (pv *Preview) initSidebar() {
 			if ev.Key() == tcell.KeyTab {
 				pv.screen.SetFocus(pv.contents.view)
 				pv.contents.view.SetSelectable(true, false).Select(1, 0)
+			}
+			if ev.Key() == tcell.KeyRune && pv.runRowAction(ev.Rune(), false) {
+				return nil
 			}
 			if ev.Key() == tcell.KeyRune {
 				switch ev.Rune() {
@@ -511,6 +593,9 @@ func (pv *Preview) initContents() {
 			if ev.Key() == tcell.KeyTab {
 				pv.screen.SetFocus(pv.sidebar)
 				pv.contents.view.SetSelectable(false, false)
+			}
+			if ev.Key() == tcell.KeyRune && pv.runRowAction(ev.Rune(), true) {
+				return nil
 			}
 			if ev.Key() == tcell.KeyRune {
 				switch ev.Rune() {

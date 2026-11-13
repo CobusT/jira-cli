@@ -9,6 +9,7 @@ import (
 
 	"github.com/ankitpokhrel/jira-cli/api"
 	"github.com/ankitpokhrel/jira-cli/internal/cmdutil"
+	"github.com/ankitpokhrel/jira-cli/internal/issueops"
 	"github.com/ankitpokhrel/jira-cli/pkg/jira"
 	"github.com/ankitpokhrel/jira-cli/pkg/jira/filter/issue"
 	"github.com/ankitpokhrel/jira-cli/pkg/tui"
@@ -49,6 +50,8 @@ type EpicList struct {
 	DefaultOrder string
 	// Layout is the initial layout; 'V' switches between layouts.
 	Layout EpicLayout
+	// Ops enables editing issues from the explorer; nil disables it.
+	Ops *issueops.Ops
 
 	// stateMu guards Data and the sort state, which refreshes update from
 	// background goroutines while the UI reads them.
@@ -212,6 +215,10 @@ func (el *EpicList) renderPanes(renderer *glamour.TermRenderer, selected string,
 			el.cycleIssueSort(reverse)
 			return el.footerText()
 		}),
+		tui.WithPreviewRowActions(el.rowActions()),
+		tui.WithPreviewDataFunc(func() ([]tui.PreviewData, string) {
+			return el.data(), el.footerText()
+		}),
 	)
 
 	return tui.NewPreview(opts...).Paint(data)
@@ -258,6 +265,9 @@ func (el *EpicList) treeHelpText() string {
 	help := "TAB/→/l: expand · ←/h: collapse · v: view · ENTER: open · c/CTRL+K: copy URL/key · /: search · s/S: sort"
 	if el.Refresh != nil {
 		help += " · r: refresh"
+	}
+	if el.Ops != nil {
+		help += " · m: status · a: assign · e: edit · E: description · C: comment · M: move · o: new"
 	}
 	return help + " · V: 2-pane view · q: quit"
 }
@@ -306,6 +316,10 @@ func (el *EpicList) renderTree(renderer *glamour.TermRenderer, selected string, 
 			copyText(key, "key")
 		}),
 		tui.WithTreeSwitchLayoutFunc(onSwitch),
+		tui.WithTreeRowActions(el.rowActions()),
+		tui.WithTreeDataFunc(func() ([]tui.TreeRow, string) {
+			return el.treeRoots(), el.footerText()
+		}),
 	}
 	if el.Refresh != nil {
 		opts = append(opts, tui.WithTreeRefreshFunc(func() ([]tui.TreeRow, string, error) {
@@ -340,6 +354,9 @@ func (el *EpicList) helpText() string {
 		"\n\t  - Press 'SHIFT+V' to switch to the single list view, where TAB expands an epic in place."
 	if el.Refresh != nil {
 		epicHelp += "\n\t  - Press 'r' (or 'CTRL+R' / 'F5') to refresh the epics and their issues."
+	}
+	if el.Ops != nil {
+		epicHelp += epicEditHelp
 	}
 	epicHelp += "\n\t\n\tPress 'q' / ESC / CTRL+C to quit."
 

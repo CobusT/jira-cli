@@ -10,6 +10,7 @@ import (
 	"github.com/ankitpokhrel/jira-cli/api"
 	"github.com/ankitpokhrel/jira-cli/internal/cmd/issue/list"
 	"github.com/ankitpokhrel/jira-cli/internal/cmdutil"
+	"github.com/ankitpokhrel/jira-cli/internal/issueops"
 	"github.com/ankitpokhrel/jira-cli/internal/query"
 	"github.com/ankitpokhrel/jira-cli/internal/view"
 	"github.com/ankitpokhrel/jira-cli/pkg/jira"
@@ -43,7 +44,19 @@ place). Press 'V' to switch between them. The initial layout can be set with
 --layout or in the config:
 
   epic:
-    layout: tree   # panes (default) or tree`
+    layout: tree   # panes (default) or tree
+
+Epics and issues can be edited from the explorer. On the selected row, press
+'m' to change the status, 'a' to assign, 'e' to edit the summary, priority,
+labels and story points, 'E' to edit the description and 'C' to comment in
+your editor ($JIRA_EDITOR, $VISUAL or $EDITOR), 'M' to move an issue to
+another epic, and 'o' to create an issue in the selected epic.
+
+The edit form shows the story points field by default. Other custom fields
+from issue.fields.custom can be listed by name instead:
+
+  epic:
+    edit_fields: ["Story Points", "Team"]`
 
 	examples = `# Display epics in an explorer view
 $ jira epic list
@@ -256,6 +269,7 @@ func epicExplorerView(cmd *cobra.Command, flags query.FlagParser, project, proje
 		Project: project,
 		Server:  server,
 		Data:    epics,
+		Ops:     issueops.New(client),
 		// Issues is called concurrently from the TUI, so it must not share
 		// mutable state: it uses its own err and, for next-gen projects, its own query.
 		Issues: func(key string) []*jira.Issue {

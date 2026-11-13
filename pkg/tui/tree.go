@@ -88,6 +88,12 @@ type Tree struct {
 	copyKeyFunc      TreeKeyFunc
 	switchLayoutFunc SwitchLayoutFunc
 	refreshing       bool
+	rowActions       map[rune]RowAction
+	dataFunc         func() ([]TreeRow, string)
+	actions          *actionHost
+	// pendingKey is a row to select once it shows up, eg: an issue whose
+	// epic's children are reloading.
+	pendingKey string
 }
 
 // TreeOption is a functional option for the tree layout.
@@ -183,6 +189,81 @@ func WithTreeSwitchLayoutFunc(fn SwitchLayoutFunc) TreeOption {
 	return func(t *Tree) { t.switchLayoutFunc = fn }
 }
 
+// WithTreeRowActions sets actions run when a user presses their key on a row.
+func WithTreeRowActions(actions map[rune]RowAction) TreeOption {
+	return func(t *Tree) { t.rowActions = actions }
+}
+
+// WithTreeDataFunc sets a function that returns the current roots and footer
+// text. Row actions use it to reload the layout after a change.
+func WithTreeDataFunc(fn func() ([]TreeRow, string)) TreeOption {
+	return func(t *Tree) { t.dataFunc = fn }
+}
+
+// treeUI is the ActionUI of the tree layout.
+type treeUI struct {
+	*actionHost
+	t *Tree
+}
+
+func (u treeUI) Reload(parents []string, selectKey string) {
+	u.t.reload(parents, selectKey)
+}
+
+// reload rebuilds the roots from the data func and reloads the children of
+// the given roots, then selects selectKey once it is visible.
+func (t *Tree) reload(parents []string, selectKey string) {
+	if t.dataFunc == nil {
+		return
+	}
+	roots, footerText := t.dataFunc()
+
+	// Drop children that are loading; they are loaded again below.
+	t.gen++
+	t.loading = make(map[string]bool)
+	for _, key := range parents {
+		delete(t.children, key)
+	}
+	t.roots = roots
+	t.setFooter(footerText)
+	t.pendingKey = selectKey
+
+	for key := range t.expanded {
+		if _, ok := t.children[key]; !ok {
+			t.expand(key)
+		}
+	}
+	t.render()
+	t.selectPending()
+}
+
+// selectPending selects the pending row if it is visible.
+func (t *Tree) selectPending() {
+	if t.pendingKey == "" {
+		return
+	}
+	for i, line := range t.lines {
+		if line.kind != treeLinePlaceholder && line.key == t.pendingKey {
+			t.view.Select(i+1, 0)
+			t.pendingKey = ""
+			return
+		}
+	}
+}
+
+func (t *Tree) runRowAction(line treeLine, ok bool, r rune) bool {
+	action, found := t.rowActions[r]
+	if !found {
+		return false
+	}
+	if !ok || line.kind == treeLinePlaceholder {
+		return true
+	}
+	target := RowTarget{Key: line.key, Parent: line.rootKey, IsParent: line.kind == treeLineRoot}
+	action(treeUI{actionHost: t.actions, t: t}, target)
+	return true
+}
+
 // Paint paints the tree layout.
 func (t *Tree) Paint(roots []TreeRow) error {
 	t.roots = roots
@@ -215,6 +296,14 @@ func (t *Tree) init() {
 		SetTextColor(tcell.ColorGray)
 
 	t.search = newSearchState(t.screen, t.footer, func() string { return t.footerText })
+	defer func() {
+		t.actions = &actionHost{
+			screen:  t.screen,
+			pages:   t.painter,
+			footer:  t.footer,
+			restore: func() { t.footer.SetText(pad(t.footerText, 1)) },
+		}
+	}()
 
 	t.view.
 		SetSelectable(true, false).
@@ -252,6 +341,12 @@ func (t *Tree) init() {
 func (t *Tree) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 	r, _ := t.view.GetSelection()
 	line, ok := t.lineAt(r)
+	// The user moved on; don't jump to a row that shows up later.
+	t.pendingKey = ""
+
+	if ev.Key() == tcell.KeyRune && t.runRowAction(line, ok, ev.Rune()) {
+		return nil
+	}
 
 	switch ev.Key() {
 	case tcell.KeyTab:
@@ -377,6 +472,7 @@ func (t *Tree) expand(rootKey string) {
 				delete(t.loading, rootKey)
 				t.children[rootKey] = rows
 				t.render()
+				t.selectPending()
 			})
 		}()
 	}

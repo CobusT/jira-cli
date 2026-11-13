@@ -170,3 +170,9 @@ func EditorName(editorCommand string) string {
 	}
 	return filepath.Base(editorCommand)
 }
+
+// DefaultEditor returns the editor command from JIRA_EDITOR, VISUAL or EDITOR,
+// falling back to nano (notepad on Windows).
+func DefaultEditor() string {
+	return defaultEditor
+}
